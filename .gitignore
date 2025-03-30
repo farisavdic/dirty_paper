@@ -23,4 +23,6 @@ docs/site/
 # environment.
 Manifest.toml
 
+# custom files to be ignored
 data/
+comments_on_scl.txt
