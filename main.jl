@@ -97,10 +97,47 @@ function simulate_polar(p, snr_dB::Float64, samples::Int)
     ber = bec / (samples * k)
     fer = fec / samples
     res = [snr_dB, fer, ber, Float64(0.0), samples, fec, bec]
-    println("SNR $snr_dB completed @ $(now())")
+    @printf "SNR %.2f completed @ %s" snr_dB now()
+    #println("SNR $snr_dB completed @ $(now())")
     return res
 end
 
+function read_test_case(filename)
+    data = Dict()
+    
+    open(filename, "r") do file
+        for line in eachline(file)
+            if occursin("n:", line)
+                data[:n] = parse(Int, split(line, ":")[2])
+            elseif occursin("k:", line)
+                data[:k] = parse(Int, split(line, ":")[2])
+            elseif occursin("nCRC:", line)
+                data[:nCRC] = parse(Int, split(line, ":")[2])
+            elseif occursin("frozen bits:", line)
+                bits = split(line, ":")[2]
+                data[:frozen_bits] = parse.(Int, split(bits, ","))
+            elseif occursin("crc polynomial:", line)
+                data[:crc_polynomial] = parse(Int, split(line, ":")[2])
+            elseif occursin("design SNR:", line)
+                snr_value = strip(split(line, ":")[2])
+                data[:design_SNR] = snr_value == "None" ? nothing : parse(Float64, snr_value)
+            end
+        end
+    end
+    
+    return data
+end
+
+file = "test_cases/5g_uci/sim/code_polar_5g-uci_R=0.5_M=2_n=64_L=1_CRC-0.txt"
+data = read_test_case(file)
+n = data[:n]
+k = data[:k]
+nCRC = data[:nCRC]
+crc_polynomial = data[:crc_polynomial]
+designSNR = data[:designSNR]
+frozen_bits = data[:frozen_bits]
+
+#=
 ### config
 # I usually put this into an extra file and include it
 n = 128
@@ -114,7 +151,6 @@ for i in frozen_indices
         break
     end
 end
-#frz = [1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 1 1 1 1 1 1 1 0 1 1 1 0 1 0 0 0 1 1 1 1 1 1 1 0 1 1 1 0 1 0 0 0 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 0 1 1 1 0 0 0 0 0 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]
 CRCbits = 0
 CRC_hex = 0x001
 
@@ -157,9 +193,12 @@ ber_c = 0
 fec = 0
 bec = 0
 global out = "snr fer ber ber_c frames fec bec\n"
-printf("simulation started @ $(now())")
+println("simulation started @ $(now())")
 for i in lo_snr:stp:hi_snr
     global out *= string(simulate_polar(p, i, 1000000), "\n")
 end
-
+open("results_$(now()).txt") do f
+    f.write(string("$(now())\n", "n: $n\nk: $k\nr: $r\n", out))
+end
 println(out)
+=#
