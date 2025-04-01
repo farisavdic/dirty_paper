@@ -40,14 +40,14 @@ function simulate_single_polar(p, sigma::Float64)
     frame_error = 0
 
     # generate k random data bits
-    data = rand([0x00, 0x01], k)
+    data = rand([0x00, 0x01], p.k)
 
     # combine data with frozen bits
-    u = Array{UInt8}(undef, n)
+    u = Array{UInt8}(undef, p.n)
     global j = 1
-    for i=1:n
-        if haskey(frozen_bits, i)
-            u[i] = frozen_bits[i]
+    for i=1:p.n
+        if haskey(p.frozen_bits, i)
+            u[i] = p.frozen_bits[i]
         else
             u[i] = data[j]
             global j += 1
@@ -59,7 +59,7 @@ function simulate_single_polar(p, sigma::Float64)
     x = SCL.encode(u)
 
     # BPSK modulation and AWGN transmission
-    y = (1 .- 2 * Float64.(x)) + randn(n) * sigma 
+    y = (1 .- 2 * Float64.(x)) + randn(p.n) * sigma 
 
     # compute channel LLRs
     llrs = (2 / sigma ^ 2) .* y
@@ -107,20 +107,16 @@ function read_test_case(filename)
     
     open(filename, "r") do file
         for line in eachline(file)
-            if occursin("n:", line)
-                data[:n] = parse(Int, split(line, ":")[2])
-            elseif occursin("k:", line)
-                data[:k] = parse(Int, split(line, ":")[2])
-            elseif occursin("nCRC:", line)
-                data[:nCRC] = parse(Int, split(line, ":")[2])
-            elseif occursin("frozen bits:", line)
-                bits = split(line, ":")[2]
-                data[:frozen_bits] = parse.(Int, split(bits, ","))
-            elseif occursin("crc polynomial:", line)
-                data[:crc_polynomial] = parse(Int, split(line, ":")[2])
-            elseif occursin("design SNR:", line)
-                snr_value = strip(split(line, ":")[2])
-                data[:design_SNR] = snr_value == "None" ? nothing : parse(Float64, snr_value)
+            key, value = split(line, ":", limit=2)
+            key = strip(key)
+            value = strip(value)
+
+            if key == "n" || key == "k" || key == "nCRC"
+                data[Symbol(key)] = parse(Int, value)
+            elseif key == "frozen bits" || key == "crc polynomial"
+                data[Symbol(replace(key, " " => "_"))] = parse.(Int, split(value, ","))
+            elseif key == "design SNR"
+                data[:design_SNR] = value == "None" ? nothing : parse(Float64, value)
             end
         end
     end
@@ -128,77 +124,82 @@ function read_test_case(filename)
     return data
 end
 
-file = "test_cases/5g_uci/sim/code_polar_5g-uci_R=0.5_M=2_n=64_L=1_CRC-0.txt"
-data = read_test_case(file)
-n = data[:n]
-k = data[:k]
-nCRC = data[:nCRC]
-crc_polynomial = data[:crc_polynomial]
-designSNR = data[:designSNR]
-frozen_bits = data[:frozen_bits]
+function run_simulations(test_directory_path::String, result_directory::String, L::Int, lo_snr::Float64, step::Float64)
+    for file in readdir(test_directory_path)
+        output_file = replace(file, "code"=>"results")
+        out = "snr fer ber ber_c frames fec bec\n"
+        config = read_test_case(string(test_directory_path, file))
+        n = config[:n]
+        k = config[:k]
+        frz = config[:frozen_bits]
+        CRCbits = config[:nCRC]
+        CRC_hex = 0x01
 
-#=
-### config
-# I usually put this into an extra file and include it
-n = 128
-k = 64
+        # pre-processing of frozen bit vector and CRC polynomial
+        @assert n - k - CRCbits == sum(frz)
+        num_frozen = Int(n - k - CRCbits)
+        frozens = findall(vec(frz) .== 1)
+        frozen_bits = Dict{Int, UInt8}()
+        for i=1:num_frozen
+            frozen_bits[frozens[i]] = 0x00
+        end
 
-frozen_indices = [1, 2, 3, 5, 9, 17, 33, 4, 6, 65, 10, 7, 18, 11, 19, 13, 34, 66, 21, 35, 25, 37, 8, 67, 12, 41, 69, 20, 14, 49, 15, 73, 22, 36, 27, 81, 38, 26, 23, 39, 97, 68, 42, 29, 70, 43, 50, 75, 71, 45, 82, 51, 74, 16, 53, 24, 77, 83, 57, 28, 98, 40, 85, 30, 44, 99, 89, 31, 72, 46, 101, 52, 47, 76, 105, 54, 78, 55, 84, 58, 113, 79, 86, 59, 100, 87, 61, 90, 102, 32, 91, 103, 106, 93, 48, 107, 56, 114, 80, 109, 60, 115, 88, 117, 62, 92, 121, 63, 104, 94, 108, 95, 110, 116, 111, 118, 119, 122, 123, 64, 125, 96, 112, 120, 124, 126, 127, 128]
-frz = zeros(Int, 1,n)
-for i in frozen_indices
-    frz[i] = 1
-    if sum(frz) == k
-        break
+        CRCpoly = Array{Bool}(undef, CRCbits+1)
+        bitstr = bitstring(CRC_hex)[end-CRCbits+1:end]
+        for j = 1:CRCbits
+            if bitstr[j] == '1'
+                CRCpoly[j] = true
+            else
+                CRCpoly[j] = false
+            end
+        end
+        CRCpoly[CRCbits+1] = true
+
+        p = SCL.Properties(n, k, L, frozen_bits, CRCbits, CRCpoly)
+
+        target_FER = 1e-3
+        min_FC = 100000
+        min_FEC = 100
+        num_inner_iter = 10000
+        max_frames = Int(1e7 * min_FEC)
+
+        snr = lo_snr
+        while true
+            frame_count = 0
+            frame_error_count = 0
+            frame_error_rate = 0.0
+            bit_error_count = 0
+            sigma = sqrt(1 / (10^(snr / 10)))
+            while frame_count < min_FC || frame_error_count < min_FEC
+                for _ in 1:num_inner_iter
+                    tmp = simulate_single_polar(p, sigma)
+                    frame_error_count += tmp[1]
+                    bit_error_count += tmp[2]
+                end
+                frame_count += num_inner_iter
+                frame_error_rate = frame_error_count / frame_count
+            end
+            if frame_error_rate <= target_FER
+                break
+            else
+                bit_error_rate = bit_error_count / config[:k] * frame_count
+                out *= @sprintf "%.6f %.6e %.6e %.6e %d %d %d\n" snr frame_error_rate bit_error_rate 0.0 frame_count frame_error_count bit_error_count
+                @printf "SNR %.2f completed @ %s\n" snr Dates.format(now(), "HH:MM:SS")
+                if frame_count >= max_frames
+                    break
+                else
+                    snr += step
+                end
+            end
+        end
+
+        # test case finished
+        println(out)
+        #@printf out
+        open(string(result_directory, output_file), "w") do f
+            write(f, out)
+        end
     end
 end
-CRCbits = 0
-CRC_hex = 0x001
 
-lo_snr = -1.0
-stp = 0.25
-hi_snr = 7.0
-L = 1
-target_FER = 1e-4
-min_FC = 1000
-min_FEC = 100
-num_inner_iter = 500
-max_frames = Int(1e7 * min_FEC)
-### config end
-
-# pre-processing of frozen bit vector and CRC polynomial
-@assert n - k - CRCbits == sum(frz)
-num_frozen = Int(n - k - CRCbits)
-frozens = findall(vec(frz) .== 1)
-frozen_bits = Dict{Int, UInt8}()
-for i=1:num_frozen
-	frozen_bits[frozens[i]] = 0x00
-end
-
-CRCpoly = Array{Bool}(undef, CRCbits+1)
-bitstr = bitstring(CRC_hex)[end-CRCbits+1:end]
-for j = 1:CRCbits
-	if bitstr[j] == '1'
-		CRCpoly[j] = true
-	else
-		CRCpoly[j] = false
-	end
-end
-CRCpoly[CRCbits+1] = true
-
-p = SCL.Properties(n, k, L, frozen_bits, CRCbits, CRCpoly)
-
-ber = 0
-fer = 0
-ber_c = 0
-fec = 0
-bec = 0
-global out = "snr fer ber ber_c frames fec bec\n"
-println("simulation started @ $(now())")
-for i in lo_snr:stp:hi_snr
-    global out *= string(simulate_polar(p, i, 1000000), "\n")
-end
-open("results_$(now()).txt") do f
-    f.write(string("$(now())\n", "n: $n\nk: $k\nr: $r\n", out))
-end
-println(out)
-=#
+run_simulations("prot/", "", 1, -1.0, 0.25)
