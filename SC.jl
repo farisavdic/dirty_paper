@@ -18,6 +18,8 @@ module SC
 
             return p
         end
+    end
+    
 
         function f(a::Float64, b::Float64)::Float64
             return sign(a) * sign(b) * min(abs(a), abs(b))
@@ -46,8 +48,8 @@ module SC
         end
 
         # attention: returns x_hat, not u_hat (run through polar encoder again to obtain u_hat)
-        function sc_polar_decoder(channel_LLRs::Array{Float64, 1}, frozen_bits::Array{UInt8, 1})
-            N = length(channel_LLRs)
+        function sc_polar_decoder(LLRs::Array{Float64, 1}, frozen_bits::Array{UInt8, 1})
+            N = length(LLRs)
             if N == 1
                 # if frozen return 0 else return depending on LLR
                 if frozen_bits[1] == 1
@@ -65,12 +67,11 @@ module SC
                 L1 = LLRs[1:half]
                 L2 = LLRs[half+1:end]
                 L_left = f(L1, L2)
-                u1_hat = decode(L_left, frozen_bits[1:half])
+                u1_hat = sc_polar_decoder(L_left, frozen_bits[1:half])
                 L_rigth = g(L1, L2, u1_hat)
-                u2_hat = decode(L_rigth, frozen_bits[half+1:end])
+                u2_hat = sc_polar_decoder(L_rigth, frozen_bits[half+1:end])
                 u1u2_hat = (u1_hat + u2_hat) .% 0x02
                 return vcat(u1u2_hat, u2_hat)
             end
         end
-    end
 end
