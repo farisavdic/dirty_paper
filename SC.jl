@@ -1,5 +1,5 @@
 module SC
-    export sc_polar_decoder, Properties, encode
+    export sc_polar_decoder, Properties, encode, bitrev
 
     mutable struct Properties
         n::Int
@@ -37,20 +37,45 @@ module SC
             return b .+ (1 .- 2 * Float64.(u)) .* a
         end
 
-        function encode(u::Array{UInt8, 1})
-            if length(u) == 1
-                return u
+        function kron_power(A, n)
+            if n == 1
+                return A
             else
-                u2 = u[2:2:end]
-                u1u2 = (u[1:2:end] + u2) .% 0x02
-                return vcat(encode(u1u2), encode(u2))
+                return kron(A, kron_power(A, n-1))
+            end
+        end
+
+        function bitrev(u)
+            if length(u) == 2
+                u_rev = u
+            else
+                u_rev = [bitrev(u[1:2:end]); bitrev(u[2:2:end])]
+            end
+            return u_rev
+        end
+
+        function encode(u::Array{UInt8, 1}, bit_reverse::Bool=false)
+            if bit_reverse
+                if length(u) == 1
+                    return u
+                else
+                    u2 = u[2:2:end]
+                    u1u2 = (u[1:2:end] + u2) .% 0x02
+                    return vcat(encode(u1u2), encode(u2))
+                end
+            else
+                G_2 = [1 0; 1 1]
+                G = kron_power(G_2, log2(length(u)))
+                return (transpose(transpose(u) * G) .% 2)
             end
         end
 
         # attention: returns x_hat, not u_hat (run through polar encoder again to obtain u_hat)
-        function sc_polar_decoder(LLRs::Array{Float64, 1}, frozen_bits::Array{UInt8, 1})
+        function sc_polar_decoder(LLRs::Array{Float64, 1}, frozen_bits::Array{UInt8, 1}, bit_reverse::Bool=false)
             N = length(LLRs)
+
             if N == 1
+                # not sure if this part works like this -> find way to get soft information!!!
                 # if frozen return 0 else return depending on LLR
                 if frozen_bits[1] == 1
                     return [0x00]
@@ -64,14 +89,34 @@ module SC
             else
                 # recursively decode
                 half = div(N, 2)
-                L1 = LLRs[1:half]
-                L2 = LLRs[half+1:end]
-                L_left = f(L1, L2)
-                u1_hat = sc_polar_decoder(L_left, frozen_bits[1:half])
-                L_rigth = g(L1, L2, u1_hat)
-                u2_hat = sc_polar_decoder(L_rigth, frozen_bits[half+1:end])
-                u1u2_hat = (u1_hat + u2_hat) .% 0x02
-                return vcat(u1u2_hat, u2_hat)
+                L_left = zeros(Float64, half)
+                L_right = zeros(Float64, half)
+                if bit_reverse
+                    for i in 1:half
+                        L_left[i] = f(LLRs[(2*i)-1], LLRs[2*i])
+                    end
+                    L_left = SC.bitrev(L_left)
+                    u1_hat = sc_polar_decoder(L_left, frozen_bits[1:half]) # not sure if frozen bit order needs to be changed
+                    for i in 1:half
+                        L_right[i] = g(LLRs[(2*i)-1], LLRs[2*i], u1_hat[i]) # probably need to bitrev u1_hat
+                    end
+                    L_right = SC.bitrev(L_right)
+                    u2_hat = sc_polar_decoder(L_right, frozen_bits[half+1:end])
+                    u1u2_hat = (u1_hat .+ u2_hat) .% 0x02
+                    return vcat(u1u2_hat, u2_hat)
+                else
+                    for i in 1:half
+                        L_left[i] = f(LLRs[i], LLRs[i+half])
+                    end
+                    u1_hat = sc_polar_decoder(L_left, frozen_bits[1:half])
+                    for i in 1:half
+                        L_right[i] = g(LLRs[i], LLRs[i+half], u1_hat[i])
+                    end
+                    u2_hat = sc_polar_decoder(L_right, frozen_bits[half+1:end])
+                    u1u2_hat = (u1_hat .+ u2_hat) .% 0x02
+                    return vcat(u1u2_hat, u2_hat)
+                end
             end
         end
+
 end
