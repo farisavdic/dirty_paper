@@ -29,13 +29,12 @@ function simulate_single_polar(p::SC.Properties, sigma::Float64, bit_reverse::Bo
     # compute channel LLRs
     llrs = (2 / sigma ^ 2) .* y
 
+    #p.frozen_bits = SC.bitrev(p.frozen_bits)
+
     # polar decode
     #u_hat = sc_decode(llrs, frozen)
     @inbounds x_hat::Array{UInt8, 1} = SC.sc_polar_decoder(llrs, p.frozen_bits, bit_reverse)
 
-    if bit_reverse
-        x_hat = SC.bitrev(x_hat)
-    end
 
     # check result
     if x_hat != x
@@ -279,6 +278,8 @@ for i in frz
     end
 end
 
+bit_reverse = true
+
 p = SC.Properties(n,k,frozen_bits)
 snr = 5.50
 sigma = sqrt(1 / (10 ^ (snr / 10)))
@@ -286,7 +287,7 @@ samples = 1000000
 global frame_error_count = 0
 global bit_error_count = 0
 for _ in 1:samples
-    tmp = simulate_single_polar(p, sigma, false)
+    tmp = simulate_single_polar(p, sigma, bit_reverse)
     global frame_error_count += tmp[1]
     global bit_error_count += tmp[2]
 end

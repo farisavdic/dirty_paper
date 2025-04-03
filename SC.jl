@@ -61,7 +61,7 @@ module SC
                 else
                     u2 = u[2:2:end]
                     u1u2 = (u[1:2:end] + u2) .% 0x02
-                    return vcat(encode(u1u2), encode(u2))
+                    return vcat(encode(u1u2, true), encode(u2, true))
                 end
             else
                 G_2 = [1 0; 1 1]
@@ -95,13 +95,13 @@ module SC
                     for i in 1:half
                         L_left[i] = f(LLRs[(2*i)-1], LLRs[2*i])
                     end
-                    L_left = SC.bitrev(L_left)
-                    u1_hat = sc_polar_decoder(L_left, frozen_bits[1:half]) # not sure if frozen bit order needs to be changed
+                    #L_left = SC.bitrev(L_left)
+                    u1_hat = sc_polar_decoder(L_left, frozen_bits[1:half], true)
                     for i in 1:half
-                        L_right[i] = g(LLRs[(2*i)-1], LLRs[2*i], u1_hat[i]) # probably need to bitrev u1_hat
+                        L_right[i] = g(LLRs[(2*i)-1], LLRs[2*i], u1_hat[i])
                     end
-                    L_right = SC.bitrev(L_right)
-                    u2_hat = sc_polar_decoder(L_right, frozen_bits[half+1:end])
+                    #L_right = SC.bitrev(L_right)
+                    u2_hat = sc_polar_decoder(L_right, frozen_bits[half+1:end], true)
                     u1u2_hat = (u1_hat .+ u2_hat) .% 0x02
                     return vcat(u1u2_hat, u2_hat)
                 else
